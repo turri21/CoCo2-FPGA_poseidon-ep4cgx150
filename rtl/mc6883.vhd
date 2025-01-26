@@ -55,16 +55,9 @@ architecture SYN of mc6883 is
 	
 	-- clocks
 	signal count          : std_logic_vector(3 downto 0);
-	signal clk_7M15909    : std_logic;
-	signal clk_3M579545   : std_logic;
-	signal clk_1M769772   : std_logic;
-	signal clk_0M894866   : std_logic;
 
 	-- some rising_edge pulses
 	signal rising_edge_hs : std_logic;
-
-	-- internal versions of pin signals
-	signal we_n_s         : std_logic;
 
 	-- video counter
 	signal b_int          : std_logic_vector(15 downto 0);
@@ -94,6 +87,28 @@ architecture SYN of mc6883 is
 	signal s_ty0		: std_logic_vector(2 downto 0);
 	signal s_ty1		: std_logic_vector(2 downto 0);
 
+	signal video_ras_addr : std_logic_vector(7 downto 0);
+	signal video_cas_addr : std_logic_vector(7 downto 0);
+	signal mpu_ras_addr : std_logic_vector(7 downto 0);
+	signal mpu_cas_addr : std_logic_vector(7 downto 0);
+
+	signal clk_e_en_n : std_logic;
+	signal clk_e_en_p : std_logic;
+	signal clk_q_en_n : std_logic;
+	signal clk_q_en_p : std_logic;
+
+	-- internal versions of pin signals
+	signal we_n_next       : std_logic;
+	signal we_n_s          : std_logic;
+	signal ras0_n_next     : std_logic;
+	signal ras0_n_s        : std_logic;
+	signal cas_n_next      : std_logic;
+	signal cas_n_s         : std_logic;
+	signal z_ram_addr_next : std_logic_vector(7 downto 0);
+	signal z_ram_addr_s    : std_logic_vector(7 downto 0);
+
+	signal turbo           : std_logic;
+
 	signal debug    : std_logic_vector(1 downto 0);
 
 begin
@@ -106,8 +121,33 @@ begin
 	--
 
 	-- clock generation, ras/cas generation
-	clk_e_en <= '1' when count = "1111" and clk_ena = '1' else '0';
-	clk_q_en <= '1' when count = "1011" and clk_ena = '1' else '0';
+	clk_e_en <= clk_e_en_n and clk_ena;
+	clk_q_en <= clk_q_en_n and clk_ena;
+	
+	process(m_memory_size, b_int, addr, ty_memory_map_type)
+	begin
+		case m_memory_size is
+			when "00" =>
+				video_ras_addr <= '0' & b_int(6 downto 0);
+				video_cas_addr <= "00" & b_int(11 downto 6);
+				mpu_ras_addr <= '0' & addr(6 downto 0);
+				mpu_cas_addr <= "00" & addr(11 downto 6);
+			when "01" =>
+				video_ras_addr <= '0' & b_int(6 downto 0);
+				video_cas_addr <= '0' & b_int(13 downto 7);
+				mpu_ras_addr <= '0' & addr(6 downto 0);
+				mpu_cas_addr <= '0' & addr(13 downto 7);
+			when others =>
+				video_ras_addr <= b_int(7 downto 0);
+				video_cas_addr <= b_int(15 downto 8);
+				mpu_ras_addr <= addr(7 downto 0);
+				if ty_memory_map_type = '0' then
+					mpu_cas_addr <= p_32k_page_switch & addr(14 downto 8);
+				else
+					mpu_cas_addr <= addr(15 downto 8);
+				end if;
+		end case;
+	end process;
 
 	-- adjust vclk until VDG and SAM are synced
 	count_eff <= count(1 downto 0) - count_offset;
@@ -117,15 +157,90 @@ begin
 	vclk_en_p <= vclk_en_p_s;
 	vclk_en_n <= vclk_en_n_s;
 
+	turbo <= '1' when r_mpu_rate(1) = '1' or (r_mpu_rate(0) = '1' and sel_ram = '0') else '0';
+
+	process(r_mpu_rate, count, sel_ram, z_ram_addr_s, we_n_s, ras0_n_s, cas_n_s, rw_n,
+	        video_ras_addr, video_cas_addr, mpu_ras_addr, mpu_cas_addr)
+	begin
+		clk_e_en_p <= '0';
+		clk_q_en_p <= '0';
+		clk_e_en_n <= '0';
+		clk_q_en_n <= '0';
+		z_ram_addr_next <= z_ram_addr_s;
+		we_n_next <= '1';
+		ras0_n_next <= ras0_n_s;
+		cas_n_next <= cas_n_s;
+
+		case count is
+			when "0000" =>
+				if turbo = '1' and sel_ram = '1' then
+					z_ram_addr_next <= mpu_ras_addr;
+				else
+					z_ram_addr_next <= video_ras_addr;
+				end if;
+				ras0_n_next <= '0';
+			when "0001" =>
+				if turbo = '1' then clk_q_en_p <= '1'; end if;
+			when "0010" =>
+				-- valid VDG address (col)
+				if turbo = '1' and sel_ram = '1' then
+					z_ram_addr_next <= mpu_cas_addr;
+				else
+					z_ram_addr_next <= video_cas_addr;
+				end if;
+				cas_n_next <= '0';
+			when "0011" =>
+				if turbo = '0' then clk_q_en_p <= '1'; end if;
+				if turbo = '1' then clk_e_en_p <= '1'; end if;
+			when "0100" =>
+			when "0101" =>
+				ras0_n_next <= '1';
+				if turbo = '1' then clk_q_en_n <= '1'; end if;
+				we_n_next <= rw_n or not sel_ram or not turbo;
+			when "0110" =>
+			when "0111" =>
+				cas_n_next <= '1';
+				if turbo = '0' then clk_e_en_p <= '1'; end if;
+				if turbo = '1' then clk_e_en_n <= '1'; end if;
+			when "1000" =>
+				-- valid MPU address (row)
+				z_ram_addr_next <= mpu_ras_addr;
+				ras0_n_next <= '0';
+			when "1001" =>
+				if turbo = '1' then clk_q_en_p <= '1'; end if;
+			when "1010" =>
+				-- valid MPU address (col)
+				z_ram_addr_next <= mpu_cas_addr;
+				cas_n_next <= '0';
+			when "1011" =>
+				if turbo = '0' then clk_q_en_n <= '1'; end if;
+				if turbo = '1' then clk_e_en_p <= '1'; end if;
+			when "1100" =>
+			when "1101" =>
+				ras0_n_next <= '1';
+				if turbo = '1' then clk_q_en_n <= '1'; end if;
+				-- drive WEn some time after mpu address is latched
+				-- on the falling edge of cas_n above
+				-- but in plenty of time before falling edge of E
+				we_n_next <= rw_n or not sel_ram;
+			when "1110" =>
+			when "1111" =>
+				cas_n_next <= '1';
+				clk_e_en_n <= '1';
+			when others =>
+				null;
+		end case;
+	end process;
+
 	PROC_MAIN : process (clk, por)
 	begin
 		if por = '1' then
-			z_ram_addr <= (others => '0');
+			z_ram_addr_s <= (others => '0');
 			count <= (others => '0');
 			clk_q <= '0';
 			clk_e <= '0';
-			ras0_n <= '1';
-			cas_n <= '1';
+			ras0_n_s <= '1';
+			cas_n_s <= '1';
 			we_n_s <= '1';
 		elsif rising_edge (clk) then
 			if vclk_en_p_s = '1' then
@@ -135,93 +250,32 @@ begin
 				vclk_s <= '0';
 			end if;
 			if clk_ena = '1' then
-				we_n_s <= '1';  -- default
-				clk_7M15909 <= count(0);
-				clk_3M579545 <= count(1);
-				clk_1M769772 <= count(2);
-				clk_0M894866 <= count(3);
-				case count is
-					when "0000" =>
-						-- valid VDG address (row)
-						-- z_ram_addr(7) is RAS1# or B(7)
-						case m_memory_size is
-							when "00" | "01" =>
-								z_ram_addr <= '0' & b_int(6 downto 0);
-							when others =>
-								z_ram_addr <= b_int(7 downto 0);
-						end case;
-						ras0_n <= '0';
-					when "0001" =>
-					when "0010" =>
-						-- valid VDG address (col)
-						case m_memory_size is
-							when "00" =>
-								z_ram_addr <= "00" & b_int(11 downto 6);
-							when "01" =>
-								z_ram_addr <= '0' & b_int(13 downto 7);
-							when others =>
-								z_ram_addr <= b_int(15 downto 8);
-						end case;
-						cas_n <= '0';
-					when "0011" =>
-						clk_q <= '1';
-					when "0100" =>
-					when "0101" =>
-						ras0_n <= '1';
-					when "0110" =>
-					when "0111" =>
-						cas_n <= '1';
-						clk_e <= '1';
-					when "1000" =>
-						-- valid MPU address (row)
-						-- z_ram_addr(7) is RAS1# or A(7)
-						case m_memory_size is
-							when "00" | "01" =>
-								z_ram_addr <= '0' & addr(6 downto 0);
-							when others =>
-								z_ram_addr <= addr(7 downto 0);
-						end case;
-						ras0_n <= '0';
-					when "1001" =>
-					when "1010" =>
-						-- valid MPU address (col)
-						-- no need to munge any signal with RAS/CAS
-						case m_memory_size is
-							when "00" =>
-								z_ram_addr <= "00" & addr(11 downto 6);
-							when "01" =>
-								-- z_ram_addr(7) is P or don't care
-								z_ram_addr <= '0' & addr(13 downto 7);
-							when others =>
-								if ty_memory_map_type = '0' then
-									z_ram_addr <= p_32k_page_switch & addr(14 downto 8);
-								else
-									z_ram_addr <= addr(15 downto 8);
-								end if;
-							end case;
-						cas_n <= '0';
-					when "1011" =>
-						clk_q <= '0';
-					when "1100" =>
-					when "1101" =>
-						ras0_n <= '1';
-						-- drive WEn some time after mpu address is latched
-						-- on the falling edge of cas_n above
-						-- but in plenty of time before falling edge of E
-						we_n_s <= rw_n or not sel_ram;
-					when "1110" =>
-					when "1111" =>
-						cas_n <= '1';
-						clk_e <= '0';
-					when others =>
-						null;
-				end case;
+				z_ram_addr_s <= z_ram_addr_next;
+				we_n_s <= we_n_next;
+				ras0_n_s <= ras0_n_next;
+				cas_n_s <= cas_n_next;
+				if clk_e_en_p = '1' then
+					clk_e <= '1';
+				end if;
+				if clk_e_en_n = '1' then
+					clk_e <= '0';
+				end if;
+				if clk_q_en_p = '1' then
+					clk_q <= '1';
+				end if;
+				if clk_q_en_n = '1' then
+					clk_q <= '0';
+				end if;
+
 				count <= count + 1;
 			end if; -- clk_ena
 		end if;
 	end process PROC_MAIN;
 
 	-- assign outputs
+	z_ram_addr <= z_ram_addr_s;
+	ras0_n <= ras0_n_s;
+	cas_n <= cas_n_s;
 	we_n <= we_n_s;
 
 	-- rising edge pulses
