@@ -1,3 +1,10 @@
+-=(CoCo2-FPGA_poseidon-ep4cgx150 notes)=-
+
+Required modules to synthesize:
+https://github.com/mist-devel/mist-modules/tree/39a233f968fcef92c7389fb4dab42acc9c81c439
+https://github.com/mist-devel/fdc1772-verilator/tree/2a0fe29c56f5e509cdbe55706b0f40e34631a1d3
+
+___
 # Tandy CoCo/Dragon32/64 FPGA replica
 
 This core is based on the [work of dshadoff and alanswx and pcornier](https://github.com/MiSTer-devel/CoCo2_MiSTer).
