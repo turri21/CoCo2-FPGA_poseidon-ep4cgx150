@@ -216,7 +216,7 @@ assign      LED = ~ledb;
 
 wire clk57, pll_locked;
 pll pll(
-	.inclk0(CLOCK_50),
+	.inclk0(CLOCK_27),
 	.c0(clk57),
 `ifdef USE_HDMI
 	.c1(HDMI_PCLK),
