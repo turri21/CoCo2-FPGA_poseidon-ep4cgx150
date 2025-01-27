@@ -6,7 +6,7 @@ https://github.com/mist-devel/mist-modules/tree/39a233f968fcef92c7389fb4dab42acc
 
 https://github.com/mist-devel/fdc1772-verilator/tree/2a0fe29c56f5e509cdbe55706b0f40e34631a1d3
 
-Using Quartus 17.0.2
+Quartus 17.0.2
 
 mist/CoCo2_poseidon-ep4cgx150.qpf
 ___
